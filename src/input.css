@@ -1,0 +1,345 @@
+@import "tailwindcss";
+@plugin "@tailwindcss/typography";
+
+@theme {
+  /* fonts */
+  --font-sans: "Inter", "sans-serif";
+  --font-mono: "JetBrains Mono", "monospace";
+
+  /* theme variables */
+  --color-brand: var(--color-brand);
+  --color-bg-app: var(--bg-app);
+  --color-bg-surface: var(--bg-surface);
+  --color-fg-primary: var(--fg-primary);
+  --color-fg-muted: var(--fg-muted);
+  --color-border-default: var(--border-default);
+}
+
+/* catpuccin colours */
+:root {
+  --color-brand: #fe640b;
+  --bg-app: #eff1f5;
+  --bg-surface: #e6e9ef;
+  --fg-primary: #4c4f69;
+  --fg-muted: #8c8fa1;
+  --border-default: #ccd0da;
+
+  /* syntax tokens (latte) */
+  --tok-keyword: #8839ef;
+  --tok-string: #40a02b;
+  --tok-number: #fe640b;
+  --tok-comment: #9ca0b0;
+  --tok-function: #1e66f5;
+  --tok-variable: #4c4f69;
+  --tok-operator: #04a5e5;
+  --tok-type: #df8e1d;
+  --tok-punctuation: #7c7f93;
+  --tok-meta: #ea76cb;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-brand: #fe640b;
+    --bg-app: #1e1e2e;
+    --bg-surface: #181825;
+    --fg-primary: #cdd6f4;
+    --fg-muted: #7f849c;
+    --border-default: #313244;
+
+    /* syntax tokens (mocha) */
+    --tok-keyword: #cba6f7;
+    --tok-string: #a6e3a1;
+    --tok-number: #fab387;
+    --tok-comment: #6c7086;
+    --tok-function: #89b4fa;
+    --tok-variable: #cdd6f4;
+    --tok-operator: #89dceb;
+    --tok-type: #f9e2af;
+    --tok-punctuation: #a6adc8;
+    --tok-meta: #f5c2e7;
+  }
+}
+
+body {
+  background-color: var(--bg-app);
+  color: var(--fg-primary);
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* text uses theme colors */
+.prose {
+  --tw-prose-body: var(--fg-primary);
+  --tw-prose-headings: var(--fg-primary);
+  --tw-prose-lead: var(--fg-muted);
+  --tw-prose-links: var(--color-brand);
+  --tw-prose-bold: var(--fg-primary);
+  --tw-prose-counters: var(--fg-muted);
+  --tw-prose-bullets: var(--fg-muted);
+  --tw-prose-hr: var(--border-default);
+  --tw-prose-quotes: var(--fg-primary);
+  --tw-prose-quote-borders: var(--border-default);
+  --tw-prose-captions: var(--fg-muted);
+  --tw-prose-code: var(--color-brand);
+  --tw-prose-pre-code: var(--fg-primary);
+  --tw-prose-pre-bg: var(--bg-app);
+  --tw-prose-th-borders: var(--border-default);
+  --tw-prose-td-borders: var(--border-default);
+}
+
+/* editor and related */
+#editor {
+  height: 100%;
+  background-color: var(--bg-app);
+}
+
+.cm-editor {
+  height: 100%;
+}
+
+.cm-editor.cm-focused {
+  outline: none;
+}
+
+.cm-scroller {
+  overflow: auto;
+}
+
+.cm-static-code {
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  overflow: hidden;
+  background-color: var(--bg-app);
+}
+
+/* override default selection color */
+.cm-selectionBackground,
+.cm-content ::selection,
+.cm-line ::selection {
+  background-color: color-mix(in srgb, var(--color-brand) 15%, transparent) !important;
+}
+
+/* remove active line highlight */
+.cm-activeLine,
+.cm-activeLineGutter {
+  background-color: transparent !important;
+}
+
+/* compact gutter spacing */
+.cm-lineNumbers .cm-gutterElement {
+  padding: 0 2px 0 2px;
+}
+
+.cm-gutter-lint {
+  width: 0.8em;
+}
+
+.cm-line {
+  padding-left: 4px !important;
+}
+
+/* run button*/
+
+/* button fill progess bar effect */
+#run-btn {
+  position: relative;
+  overflow: hidden;
+  transition: all 0.2s ease;
+}
+
+#run-btn:active:not(:disabled) {
+  transform: scale(0.95);
+}
+
+#run-btn.run-btn-fill::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(255, 255, 255, 0.15);
+  animation: progress 3s ease-out forwards;
+  z-index: 0;
+}
+
+/* ensure button content is above the progress background */
+#run-btn span {
+  position: relative;
+  z-index: 1;
+}
+
+/* the progress animation might not be visible at all for short exec times */
+@keyframes progress {
+  0% {
+    left: -100%;
+  }
+
+  100% {
+    left: 0%;
+  }
+}
+
+
+/* scroll behavior during resize */
+body.resizing * {
+  scrollbar-width: none !important;
+}
+
+body.resizing *::-webkit-scrollbar {
+  display: none !important;
+}
+
+/* hide scrollbar utility */
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* chat tabs edge fade masks */
+.chat-tabs-fade-left {
+  background: linear-gradient(to right, var(--bg-surface) 0%, transparent 100%);
+}
+
+.chat-tabs-fade-right {
+  background: linear-gradient(to left, var(--bg-surface) 0%, transparent 100%);
+}
+
+/* syntax tokens */
+.tok-keyword,
+.tok-atom,
+.tok-bool {
+  color: var(--tok-keyword);
+}
+
+.tok-string,
+.tok-string2 {
+  color: var(--tok-string);
+}
+
+.tok-number {
+  color: var(--tok-number);
+}
+
+.tok-comment {
+  color: var(--tok-comment);
+  font-style: italic;
+}
+
+.tok-definition,
+.tok-propertyName {
+  color: var(--tok-function);
+}
+
+.tok-typeName,
+.tok-className {
+  color: var(--tok-type);
+}
+
+.tok-operator {
+  color: var(--tok-operator);
+}
+
+.tok-punctuation,
+.tok-bracket {
+  color: var(--tok-punctuation);
+}
+
+.tok-meta {
+  color: var(--tok-meta);
+}
+
+.tok-variableName {
+  color: var(--tok-variable);
+}
+
+/* highlight.js tokens */
+.hljs {
+  color: var(--fg-primary);
+  background: transparent;
+}
+
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-built_in,
+.hljs-tag {
+  color: var(--tok-keyword);
+}
+
+.hljs-string,
+.hljs-symbol,
+.hljs-regexp {
+  color: var(--tok-string);
+}
+
+.hljs-number {
+  color: var(--tok-number);
+}
+
+.hljs-comment,
+.hljs-quote,
+.hljs-deletion {
+  color: var(--tok-comment);
+  font-style: italic;
+}
+
+.hljs-title.function_,
+.hljs-function,
+.hljs-title {
+  color: var(--tok-function);
+}
+
+.hljs-type,
+.hljs-title.class_,
+.hljs-section {
+  color: var(--tok-type);
+}
+
+.hljs-operator {
+  color: var(--tok-operator);
+}
+
+.hljs-punctuation {
+  color: var(--tok-punctuation);
+}
+
+.hljs-meta,
+.hljs-meta .hljs-keyword,
+.hljs-meta .hljs-string {
+  color: var(--tok-meta);
+}
+
+.hljs-variable,
+.hljs-template-variable,
+.hljs-attr,
+.hljs-attribute,
+.hljs-property,
+.hljs-params {
+  color: var(--tok-variable);
+}
+
+/* search match highlight */
+mark.search-highlight {
+  background-color: color-mix(in srgb, var(--color-brand) 25%, transparent);
+  color: inherit;
+  font-weight: 600;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+/* command palette preview code block */
+.palette-preview-code {
+  background-color: var(--bg-app);
+  border: 1px solid var(--border-default);
+  border-radius: 0;
+  padding: 0.75rem 1rem;
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  overflow-x: auto;
+}

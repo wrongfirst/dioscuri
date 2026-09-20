@@ -1,0 +1,1 @@
+let hello () = "some message"

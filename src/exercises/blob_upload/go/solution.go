@@ -1,50 +1,73 @@
 package main
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 )
 
-var ErrHashMismatch = errors.New("hash mismatch")
-
-type BlobSaver interface {
+type BlobStore interface {
 	SaveBlob(hash string, r io.Reader) error
+	RemoveBlob(hash string) error
 }
 
-type MockBlobSaver struct {
-	Saved map[string][]byte
+type MockBlobStore struct {
+	Blobs map[string][]byte
 }
 
-func NewMockBlobSaver() *MockBlobSaver {
-	return &MockBlobSaver{Saved: make(map[string][]byte)}
+func NewMockBlobStore() *MockBlobStore {
+	return &MockBlobStore{Blobs: make(map[string][]byte)}
 }
 
-func (m *MockBlobSaver) SaveBlob(hash string, r io.Reader) error {
+func (m *MockBlobStore) SaveBlob(hash string, r io.Reader) error {
 	data, err := io.ReadAll(r)
 	if err != nil {
 		return err
 	}
-	m.Saved[hash] = data
+	m.Blobs[hash] = data
 	return nil
 }
 
-// IngestBlob verifies that payload matches claimedHash before persisting.
-func IngestBlob(saver BlobSaver, claimedHash string, r io.Reader) error {
-	var buf bytes.Buffer
-	hasher := sha256.New()
-	w := io.MultiWriter(&buf, hasher)
+func (m *MockBlobStore) RemoveBlob(hash string) error {
+	delete(m.Blobs, hash)
+	return nil
+}
 
-	if _, err := io.Copy(w, r); err != nil {
-		return err
+// UploadBlobHandler streams r.Body directly to store while verifying content hash on the fly.
+func UploadBlobHandler(store BlobStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut && r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		claimedHash := strings.TrimPrefix(r.URL.Path, "/api/blob/")
+		if claimedHash == "" {
+			claimedHash = r.URL.Query().Get("hash")
+		}
+		if claimedHash == "" || strings.Contains(claimedHash, "/") {
+			http.Error(w, "invalid or missing hash", http.StatusBadRequest)
+			return
+		}
+
+		hasher := sha256.New()
+		tee := io.TeeReader(r.Body, hasher)
+
+		if err := store.SaveBlob(claimedHash, tee); err != nil {
+			http.Error(w, "storage error", http.StatusInternalServerError)
+			return
+		}
+
+		actualHash := hex.EncodeToString(hasher.Sum(nil))
+		if actualHash != claimedHash {
+			store.RemoveBlob(claimedHash)
+			http.Error(w, "hash mismatch", http.StatusBadRequest)
+			return
+		}
+
+		w.WriteHeader(http.StatusCreated)
 	}
-
-	digest := hex.EncodeToString(hasher.Sum(nil))
-	if digest != claimedHash {
-		return ErrHashMismatch
-	}
-
-	return saver.SaveBlob(claimedHash, &buf)
 }

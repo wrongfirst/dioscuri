@@ -1,5 +1,5 @@
 {
-	// Deterministic sequence reproduction
+	// 1. Deterministic sequence reproduction across identical seeds
 	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	h1 := NewSimHarness(42, start)
 	h2 := NewSimHarness(42, start)
@@ -9,15 +9,12 @@
 		r2 := h2.RandomInt(1000)
 		Tests.EqualCheck("random numbers match across identical seeds", r1, r2)
 	}
-}
 
-{
-	// Virtual time advancement
-	start := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
-	h := NewSimHarness(100, start)
-	Tests.EqualCheck("initial time matches start", start, h.Now())
+	// 2. Virtual time progression via Advance
+	timeHarness := NewSimHarness(100, start)
+	Tests.BoolCheck("initial time matches start", start.Equal(timeHarness.Now()))
 
-	h.Advance(5 * time.Minute)
-	expected := time.Date(2026, 1, 1, 12, 5, 0, 0, time.UTC)
-	Tests.EqualCheck("time advances by 5 minutes", expected, h.Now())
+	timeHarness.Advance(5 * time.Minute)
+	expected := time.Date(2026, 1, 1, 0, 5, 0, 0, time.UTC)
+	Tests.BoolCheck("time advances by 5 minutes", expected.Equal(timeHarness.Now()))
 }

@@ -1,46 +1,48 @@
 {
-	// Production request with default index.html and content-type
-	store := NewMockBlobOpener()
-	store.Blobs["hashHTML"] = []byte("<h1>Welcome</h1>")
-	store.Blobs["hashCSS"] = []byte("body { color: red; }")
+	// Setup test environment
+	fs := NewMockFS()
+	store := NewMockStore()
 
-	state := &RouterState{
-		ActiveDeployID: "v1",
-		Manifests: map[string]map[string]string{
-			"v1": {
-				"/index.html":       "hashHTML",
-				"/assets/style.css": "hashCSS",
-			},
-		},
-	}
+	// Active production deployment: dep-prod
+	fs.Files["/production.json"] = []byte(`{"deploy_id":"dep-prod"}`)
+	fs.Files["/manifests/dep-prod.json"] = []byte(`{"/index.html":"hash-html","/assets/style.css":"hash-css"}`)
 
-	resRoot := RouteRequest(state, store, "/")
-	Tests.EqualCheck("root path status 200", 200, resRoot.StatusCode)
-	Tests.EqualCheck("root path content type text/html", "text/html", resRoot.ContentType)
-	Tests.EqualCheck("root body matches", "<h1>Welcome</h1>", string(resRoot.Body))
+	// Preview deployment: dep-preview
+	fs.Files["/manifests/dep-preview.json"] = []byte(`{"/index.html":"hash-preview-html"}`)
 
-	resCSS := RouteRequest(state, store, "/assets/style.css")
-	Tests.EqualCheck("css status 200", 200, resCSS.StatusCode)
-	Tests.EqualCheck("css content type text/css", "text/css", resCSS.ContentType)
-}
+	// Populate blobs
+	store.Blobs["hash-html"] = []byte("<h1>Production Site</h1>")
+	store.Blobs["hash-css"] = []byte("body { color: red; }")
+	store.Blobs["hash-preview-html"] = []byte("<h1>Preview Site</h1>")
 
-{
-	// Preview routing and 404 handling
-	store := NewMockBlobOpener()
-	store.Blobs["hashV2"] = []byte("<h1>Preview V2</h1>")
+	server := NewWebServer(fs, store)
 
-	state := &RouterState{
-		ActiveDeployID: "v1",
-		Manifests: map[string]map[string]string{
-			"v1": {"/index.html": "hashV1"},
-			"v2": {"/index.html": "hashV2"},
-		},
-	}
+	// 1. Root route "/" resolves to production index.html
+	reqRoot := httptest.NewRequest(http.MethodGet, "/", nil)
+	recRoot := httptest.NewRecorder()
+	server.ServeHTTP(recRoot, reqRoot)
+	Tests.EqualCheck("root status is 200", http.StatusOK, recRoot.Code)
+	Tests.EqualCheck("root content-type is text/html", "text/html; charset=utf-8", recRoot.Header().Get("Content-Type"))
+	Tests.EqualCheck("root content matches", "<h1>Production Site</h1>", recRoot.Body.String())
 
-	resPreview := RouteRequest(state, store, "/preview/v2/index.html")
-	Tests.EqualCheck("preview status 200", 200, resPreview.StatusCode)
-	Tests.EqualCheck("preview body matches v2", "<h1>Preview V2</h1>", string(resPreview.Body))
+	// 2. Production asset route
+	reqCSS := httptest.NewRequest(http.MethodGet, "/assets/style.css", nil)
+	recCSS := httptest.NewRecorder()
+	server.ServeHTTP(recCSS, reqCSS)
+	Tests.EqualCheck("css status is 200", http.StatusOK, recCSS.Code)
+	Tests.EqualCheck("css content-type is text/css", "text/css; charset=utf-8", recCSS.Header().Get("Content-Type"))
+	Tests.EqualCheck("css content matches", "body { color: red; }", recCSS.Body.String())
 
-	res404 := RouteRequest(state, store, "/nonexistent.txt")
-	Tests.EqualCheck("missing path returns 404", 404, res404.StatusCode)
+	// 3. Preview route resolves to preview manifest
+	reqPrev := httptest.NewRequest(http.MethodGet, "/preview/dep-preview/", nil)
+	recPrev := httptest.NewRecorder()
+	server.ServeHTTP(recPrev, reqPrev)
+	Tests.EqualCheck("preview status is 200", http.StatusOK, recPrev.Code)
+	Tests.EqualCheck("preview content matches", "<h1>Preview Site</h1>", recPrev.Body.String())
+
+	// 4. Missing file returns 404
+	reqMissing := httptest.NewRequest(http.MethodGet, "/missing.png", nil)
+	recMissing := httptest.NewRecorder()
+	server.ServeHTTP(recMissing, reqMissing)
+	Tests.EqualCheck("missing file returns 404", http.StatusNotFound, recMissing.Code)
 }

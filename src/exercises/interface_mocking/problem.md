@@ -1,24 +1,33 @@
-Calling OS filesystem operations directly couples code to physical storage, making simulation and hardware fault injection difficult.
+Calling OS filesystem functions directly hardwires code to physical disk, preventing in-memory testing and deterministic simulation. Defining an interface contract decouples storage callers from the underlying filesystem.
 
-Abstracting file I/O behind an interface allows swapping between the real filesystem and an in-memory test double.
+## Architecture & Flow
 
-## Task
-
-Implement the in-memory double and reader helper:
-
-1. **`ReadOpener` interface**:
+1. **Interface Contract (`ReaderFS`)**:
+   Requires only opening a path to obtain a readable, closeable stream:
    ```go
-   type ReadOpener interface {
+   type ReaderFS interface {
        Open(name string) (io.ReadCloser, error)
    }
    ```
 
-2. **`MemoryOpener` struct**:
-   - `NewMemoryOpener() *MemoryOpener`: Initializes the struct.
-   - `AddFile(name string, data []byte)`: Stores the byte slice in memory.
-   - `Open(name string) (io.ReadCloser, error)`: Returns an `io.ReadCloser` over the data. If the file is missing, returns `os.ErrNotExist`.
+2. **In-Memory Double (`MockFS`)**:
+   - Holds an internal `map[string][]byte`.
+   - `AddFile(name, data)` stores the byte slice.
+   - `Open(name)` checks for the key. If found, wraps the data in `io.NopCloser(bytes.NewReader(data))`. If missing, returns `os.ErrNotExist`.
 
-3. **`ReadFileString(ro ReadOpener, name string) (string, error)`**:
-   - Opens the file with `ro.Open(name)`.
-   - Ensures the file is closed after reading (`defer`).
-   - Reads the full content and returns it as a string.
+3. **Reader Helper (`ReadFileString`)**:
+   - Opens `name` via `fs.Open(name)`.
+   - Schedules closure immediately: `defer r.Close()`.
+   - Streams bytes into a `strings.Builder` using `io.Copy(&sb, r)` to avoid intermediate slice allocations.
+   - Returns the assembled string.
+
+## Task
+
+Implement `MockFS`, its methods, and `ReadFileString`:
+
+```go
+func NewMockFS() *MockFS
+func (m *MockFS) AddFile(name string, data []byte)
+func (m *MockFS) Open(name string) (io.ReadCloser, error)
+func ReadFileString(fs ReaderFS, name string) (string, error)
+```

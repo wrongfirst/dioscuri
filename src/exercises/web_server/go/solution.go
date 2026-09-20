@@ -2,36 +2,58 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path"
 	"strings"
 )
 
+type FS interface {
+	Exists(path string) bool
+	Open(path string) (io.ReadCloser, error)
+}
+
 type BlobOpener interface {
 	OpenBlob(hash string) (io.ReadCloser, error)
 }
 
-type RouterState struct {
-	ActiveDeployID string
-	Manifests      map[string]map[string]string
+type ActivePointer struct {
+	DeployID string `json:"deploy_id"`
 }
 
-type Response struct {
-	StatusCode  int
-	ContentType string
-	Body        []byte
+type MockFS struct {
+	Files map[string][]byte
 }
 
-type MockBlobOpener struct {
+func NewMockFS() *MockFS {
+	return &MockFS{Files: make(map[string][]byte)}
+}
+
+func (m *MockFS) Exists(p string) bool {
+	_, ok := m.Files[p]
+	return ok
+}
+
+func (m *MockFS) Open(p string) (io.ReadCloser, error) {
+	data, ok := m.Files[p]
+	if !ok {
+		return nil, os.ErrNotExist
+	}
+	return io.NopCloser(bytes.NewReader(data)), nil
+}
+
+type MockStore struct {
 	Blobs map[string][]byte
 }
 
-func NewMockBlobOpener() *MockBlobOpener {
-	return &MockBlobOpener{Blobs: make(map[string][]byte)}
+func NewMockStore() *MockStore {
+	return &MockStore{Blobs: make(map[string][]byte)}
 }
 
-func (m *MockBlobOpener) OpenBlob(hash string) (io.ReadCloser, error) {
+func (m *MockStore) OpenBlob(hash string) (io.ReadCloser, error) {
 	data, ok := m.Blobs[hash]
 	if !ok {
 		return nil, os.ErrNotExist
@@ -39,65 +61,94 @@ func (m *MockBlobOpener) OpenBlob(hash string) (io.ReadCloser, error) {
 	return io.NopCloser(bytes.NewReader(data)), nil
 }
 
-func getContentType(p string) string {
-	ext := path.Ext(p)
-	switch ext {
-	case ".html":
-		return "text/html"
+func detectContentType(filePath string) string {
+	switch strings.ToLower(path.Ext(filePath)) {
+	case ".html", ".htm":
+		return "text/html; charset=utf-8"
 	case ".css":
-		return "text/css"
+		return "text/css; charset=utf-8"
 	case ".js":
 		return "application/javascript"
 	case ".json":
 		return "application/json"
+	case ".png":
+		return "image/png"
+	case ".svg":
+		return "image/svg+xml"
 	default:
 		return "application/octet-stream"
 	}
 }
 
-// RouteRequest routes production and preview requests to the correct blob.
-func RouteRequest(state *RouterState, store BlobOpener, urlPath string) Response {
-	targetDeployID := state.ActiveDeployID
-	targetPath := urlPath
+// NewWebServer returns an http.Handler that routes production and preview requests via manifests.
+func NewWebServer(fs FS, store BlobOpener) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var deployID string
+		var filePath string
 
-	if strings.HasPrefix(urlPath, "/preview/") {
-		trimmed := strings.TrimPrefix(urlPath, "/preview/")
-		parts := strings.SplitN(trimmed, "/", 2)
-		if len(parts) < 2 {
-			return Response{StatusCode: 404}
+		cleanPath := path.Clean(r.URL.Path)
+
+		if strings.HasPrefix(cleanPath, "/preview/") {
+			rest := strings.TrimPrefix(cleanPath, "/preview/")
+			parts := strings.SplitN(rest, "/", 2)
+			deployID = parts[0]
+			if len(parts) > 1 && parts[1] != "" {
+				filePath = "/" + parts[1]
+			} else {
+				filePath = "/"
+			}
+		} else {
+			prodReader, err := fs.Open("/production.json")
+			if err != nil {
+				http.NotFound(w, r)
+				return
+			}
+			var active ActivePointer
+			err = json.NewDecoder(prodReader).Decode(&active)
+			prodReader.Close()
+			if err != nil || active.DeployID == "" {
+				http.NotFound(w, r)
+				return
+			}
+			deployID = active.DeployID
+			filePath = cleanPath
 		}
-		targetDeployID = parts[0]
-		targetPath = "/" + parts[1]
-	}
 
-	if targetPath == "/" {
-		targetPath = "/index.html"
-	}
+		if filePath == "/" || strings.HasSuffix(filePath, "/") {
+			filePath = path.Join(filePath, "index.html")
+		}
+		if !strings.HasPrefix(filePath, "/") {
+			filePath = "/" + filePath
+		}
 
-	manifest, ok := state.Manifests[targetDeployID]
-	if !ok {
-		return Response{StatusCode: 404}
-	}
+		manifestReader, err := fs.Open("/manifests/" + deployID + ".json")
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		var manifest map[string]string
+		err = json.NewDecoder(manifestReader).Decode(&manifest)
+		manifestReader.Close()
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
 
-	hash, ok := manifest[targetPath]
-	if !ok {
-		return Response{StatusCode: 404}
-	}
+		hash, ok := manifest[filePath]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
 
-	r, err := store.OpenBlob(hash)
-	if err != nil {
-		return Response{StatusCode: 404}
-	}
-	defer r.Close()
+		blobReader, err := store.OpenBlob(hash)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		defer blobReader.Close()
 
-	data, err := io.ReadAll(r)
-	if err != nil {
-		return Response{StatusCode: 500}
-	}
-
-	return Response{
-		StatusCode:  200,
-		ContentType: getContentType(targetPath),
-		Body:        data,
-	}
+		w.Header().Set("Content-Type", detectContentType(filePath))
+		w.WriteHeader(http.StatusOK)
+		io.Copy(w, blobReader)
+	})
 }

@@ -1,15 +1,24 @@
-Reading entire files into memory with `os.ReadFile` or `io.ReadAll` exhausts memory when dealing with large payloads.
+Reading entire files into memory with `os.ReadFile` exhausts RAM when processing large files. To achieve constant $O(1)$ memory usage, data must be transferred in fixed-size chunks from an `io.Reader` into an `io.Writer`.
 
-In Go, streaming between an `io.Reader` and an `io.Writer` avoids loading the full byte stream into RAM. The standard `io.Copy(dst, src)` function transfers data in fixed-size chunk buffers until `io.EOF`.
+## Execution Flow
+
+1. **Validation**: Check that `bufSize > 0`. If not, return `0, ErrInvalidBufferSize`.
+2. **Buffer Allocation**: Allocate a single reusable chunk buffer: `make([]byte, bufSize)`.
+3. **Transfer Loop**:
+   - Call `src.Read(buf)` to fill the buffer.
+   - If `nr > 0` bytes were read, call `dst.Write(buf[:nr])`.
+   - Add bytes written to the running total. If `nw != nr`, return the total and `io.ErrShortWrite`.
+   - Check the error from `src.Read`:
+     - If `io.EOF`, all bytes have been transferred. Break cleanly.
+     - For any other error, return immediately.
 
 ## Task
 
-Implement `CopyAndCount`:
+Implement `StreamCopy`:
 
 ```go
-func CopyAndCount(dst io.Writer, src io.Reader) (int64, error)
+func StreamCopy(dst io.Writer, src io.Reader, bufSize int) (int64, error)
 ```
 
-- Stream all bytes from `src` into `dst`.
-- Return the total number of bytes transferred.
-- Return any error encountered during the operation.
+- Stream all bytes from `src` to `dst` using chunks of `bufSize`.
+- Return the total byte count written and any error encountered (`nil` on success).

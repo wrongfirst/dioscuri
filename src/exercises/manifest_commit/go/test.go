@@ -1,35 +1,57 @@
 {
-	// Deploy V1 and V2
-	state := NewDeploymentState()
-	checker := NewMockChecker("hashA", "hashB", "hashC")
+	// Commit succeeds when all blobs exist
+	fs := NewMockFS()
+	checker := NewMockBlobChecker("hash1", "hash2")
+	manifest := Manifest{
+		"/index.html": "hash1",
+		"/style.css":  "hash2",
+	}
 
-	v1Manifest := map[string]string{"/index.html": "hashA", "/app.js": "hashB"}
-	err1 := CommitDeploy(state, checker, "deploy-v1", v1Manifest)
-	Tests.EqualCheck("commit deploy-v1 succeeds", nil, err1)
-	Tests.EqualCheck("active deploy is deploy-v1", "deploy-v1", state.ActiveDeployID)
+	err := CommitDeploy(fs, checker, "dep-001", manifest)
+	Tests.EqualCheck("commit error is nil", nil, err)
 
-	v2Manifest := map[string]string{"/index.html": "hashC", "/app.js": "hashB"}
-	err2 := CommitDeploy(state, checker, "deploy-v2", v2Manifest)
-	Tests.EqualCheck("commit deploy-v2 succeeds", nil, err2)
-	Tests.EqualCheck("active deploy is deploy-v2", "deploy-v2", state.ActiveDeployID)
+	Tests.BoolCheck("manifest file created", fs.Exists("/manifests/dep-001.json"))
+	Tests.BoolCheck("production.json exists", fs.Exists("/production.json"))
+	Tests.BoolCheck("tmp file was cleaned up via rename", !fs.Exists("/production.json.tmp"))
 
-	// Rollback to V1
-	errRollback := RollbackDeploy(state, "deploy-v1")
-	Tests.EqualCheck("rollback to deploy-v1 succeeds", nil, errRollback)
-	Tests.EqualCheck("active deploy reverted to deploy-v1", "deploy-v1", state.ActiveDeployID)
+	r, _ := fs.Open("/production.json")
+	var active ActivePointer
+	json.NewDecoder(r).Decode(&active)
+	r.Close()
+	Tests.EqualCheck("active deploy ID is dep-001", "dep-001", active.DeployID)
 }
 
 {
-	// Commit with missing blob fails
-	state := NewDeploymentState()
-	checker := NewMockChecker("hashA")
+	// Commit fails if any blob is missing
+	fs := NewMockFS()
+	checker := NewMockBlobChecker("hash1") // hash2 is missing
+	manifest := Manifest{
+		"/index.html": "hash1",
+		"/style.css":  "hash2",
+	}
 
-	incompleteManifest := map[string]string{"/index.html": "hashA", "/missing.png": "hashMissing"}
-	err := CommitDeploy(state, checker, "bad-deploy", incompleteManifest)
-	Tests.EqualCheck("missing blob returns ErrMissingBlobs", ErrMissingBlobs, err)
-	Tests.EqualCheck("active deploy unchanged", "", state.ActiveDeployID)
+	err := CommitDeploy(fs, checker, "dep-002", manifest)
+	Tests.EqualCheck("commit returns ErrMissingBlobs", ErrMissingBlobs, err)
+	Tests.BoolCheck("manifest was not created", !fs.Exists("/manifests/dep-002.json"))
+}
 
-	// Rollback to nonexistent deploy fails
-	errNotFound := RollbackDeploy(state, "nonexistent")
-	Tests.EqualCheck("rollback nonexistent returns ErrDeployNotFound", ErrDeployNotFound, errNotFound)
+{
+	// Rollback succeeds for existing deployment
+	fs := NewMockFS()
+	checker := NewMockBlobChecker("h1", "h2")
+	CommitDeploy(fs, checker, "dep-001", Manifest{"/a": "h1"})
+	CommitDeploy(fs, checker, "dep-002", Manifest{"/b": "h2"})
+
+	err := RollbackDeploy(fs, "dep-001")
+	Tests.EqualCheck("rollback error is nil", nil, err)
+
+	r, _ := fs.Open("/production.json")
+	var active ActivePointer
+	json.NewDecoder(r).Decode(&active)
+	r.Close()
+	Tests.EqualCheck("active pointer restored to dep-001", "dep-001", active.DeployID)
+
+	// Rollback fails for non-existent deployment
+	errMissing := RollbackDeploy(fs, "dep-999")
+	Tests.EqualCheck("rollback returns ErrDeployNotFound", ErrDeployNotFound, errMissing)
 }

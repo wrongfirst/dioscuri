@@ -1,6 +1,21 @@
-Deploying a manifest requires verifying that every referenced content hash exists in storage before activating the deployment.
+Activating a deployment requires verifying that all referenced blobs exist in storage before publishing. To prevent partial updates or downtime, production pointers must be updated atomically on disk.
 
-Once verified, the manifest is saved under its deployment ID and the active production pointer is updated. A rollback switches the active pointer back to an earlier deployment ID.
+Manifests are saved at `/manifests/<deploy_id>.json`. The active site pointer is stored at `/production.json`.
+
+## Execution Flow
+
+1. **Integrity Pre-check (`CommitDeploy`)**:
+   - Verify every hash in `manifest` via `checker.HasBlob(hash)`.
+   - If any hash is missing, abort and return `ErrMissingBlobs`.
+2. **Persist Manifest**:
+   - Open `/manifests/<deployID>.json` via `fs.Create`.
+   - Encode `manifest` as JSON and close the stream.
+3. **Atomic Pointer Swap**:
+   - Write `ActivePointer{DeployID: deployID}` to `/production.json.tmp` via `fs.Create`.
+   - Atomically rename `/production.json.tmp` to `/production.json` using `fs.Rename`.
+4. **Rollback (`RollbackDeploy`)**:
+   - Check if `/manifests/<targetDeployID>.json` exists in `fs`. If not, return `ErrDeployNotFound`.
+   - Atomically write `ActivePointer{DeployID: targetDeployID}` to `/production.json.tmp` and rename to `/production.json`.
 
 ## Task
 
@@ -12,23 +27,23 @@ var (
     ErrDeployNotFound = errors.New("deployment not found")
 )
 
+type FS interface {
+    Exists(path string) bool
+    Create(path string) (io.WriteCloser, error)
+    Open(path string) (io.ReadCloser, error)
+    Rename(oldPath, newPath string) error
+}
+
 type BlobChecker interface {
     HasBlob(hash string) bool
 }
 
-type DeploymentState struct {
-    ActiveDeployID string
-    Manifests      map[string]map[string]string
+type Manifest map[string]string
+
+type ActivePointer struct {
+    DeployID string `json:"deploy_id"`
 }
 
-func CommitDeploy(state *DeploymentState, checker BlobChecker, deployID string, manifest map[string]string) error
-func RollbackDeploy(state *DeploymentState, targetDeployID string) error
+func CommitDeploy(fs FS, checker BlobChecker, deployID string, manifest Manifest) error
+func RollbackDeploy(fs FS, targetDeployID string) error
 ```
-
-- `CommitDeploy`:
-  - Verify every hash in `manifest` exists in `checker`. Return `ErrMissingBlobs` if any is missing.
-  - Store `manifest` in `state.Manifests[deployID]`.
-  - Set `state.ActiveDeployID = deployID`.
-- `RollbackDeploy`:
-  - If `targetDeployID` does not exist in `state.Manifests`, return `ErrDeployNotFound`.
-  - Set `state.ActiveDeployID = targetDeployID`.

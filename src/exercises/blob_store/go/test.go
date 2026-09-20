@@ -1,6 +1,6 @@
 {
 	// Save and retrieve blob
-	fs := NewMemBlobFS()
+	fs := NewMockFS()
 	store := NewStore(fs, "/var/blobs")
 
 	hash := "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
@@ -21,7 +21,7 @@
 
 {
 	// Idempotency: saving existing blob is a no-op
-	fs := NewMemBlobFS()
+	fs := NewMockFS()
 	store := NewStore(fs, "/var/blobs")
 
 	hash := "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"

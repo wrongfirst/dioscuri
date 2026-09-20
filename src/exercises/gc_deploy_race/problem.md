@@ -1,6 +1,20 @@
-If garbage collection runs while a client is uploading files, newly uploaded blobs are not yet referenced by any committed manifest. A naive GC deletes them immediately, causing the upcoming deployment to fail.
+If garbage collection executes while a client is in the middle of uploading files, newly arrived blobs are not yet referenced by any committed manifest. A naive mark-and-sweep GC immediately purges them as orphaned, causing the upcoming deployment commit to fail with dangling references.
 
-To prevent this race condition, GC must enforce a quarantine period: unreferenced blobs created recently must be preserved.
+To protect in-flight uploads, the garbage collector must enforce a quarantine period: unreferenced blobs created within the quarantine window are preserved.
+
+## Execution Flow
+
+1. **Mark Phase**:
+   - Traverse all provided manifests.
+   - Insert every referenced hash into a `live` set (`map[string]bool`).
+2. **Sweep Phase with Quarantine**:
+   - Query all blobs and creation timestamps via `store.ListBlobs()`.
+   - For each blob:
+     - If referenced in `live`: skip deletion.
+     - If unreferenced, compute its age: `now.Sub(blob.CreatedAt)`.
+     - If `age > quarantine`: delete it via `store.DeleteBlob(blob.Hash)` and increment the deleted counter.
+     - If `age <= quarantine`: preserve the blob (in-flight upload protection).
+3. Return `(deletedCount, nil)`.
 
 ## Task
 
@@ -24,10 +38,3 @@ func RunQuarantinedGC(
     quarantine time.Duration,
 ) (int, error)
 ```
-
-1. **Mark**: Collect all hashes referenced in `manifests` into a live set.
-2. **Sweep with Quarantine**: For each blob:
-   - If present in the live set, preserve it.
-   - If unreferenced, compute its age (`now.Sub(b.CreatedAt)`).
-   - Only delete the blob if its age exceeds `quarantine`.
-3. Return the count of deleted blobs.

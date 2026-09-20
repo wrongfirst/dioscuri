@@ -1,34 +1,36 @@
-In a manifest-driven web server, requests are served via manifest lookup rather than direct disk traversal:
+In a manifest-driven web server, static files are not read directly from the physical filesystem. Requests are routed through manifest lookups that resolve URLs to content hashes, which are then streamed from the blob store.
 
-1. **Production requests** (`/*`): Look up the file in the manifest of `ActiveDeployID`.
-2. **Preview requests** (`/preview/<deploy_id>/*`): Look up the file in the manifest of the specified `deploy_id`.
+Production requests (`/*`) resolve using `/production.json`. Preview requests (`/preview/<deploy_id>/*`) resolve using `/manifests/<deploy_id>.json`.
 
-A request for `"/"` resolves to `"/index.html"`.
+## Router Execution Flow
+
+1. **Route Resolution**:
+   - If `r.URL.Path` starts with `/preview/`:
+     Extract the `<deploy_id>` and the subpath (e.g. `/preview/dep-001/css/style.css` $\to$ deploy `dep-001`, path `/css/style.css`).
+   - Otherwise:
+     Read `/production.json` from `fs` to find the active deploy ID. If missing, return `404 Not Found`.
+   - If the resolved path is `"/"` or ends with `"/"`, map to `"index.html"` (e.g. `/` $\to$ `/index.html`).
+2. **Manifest Lookup**:
+   - Open and decode `/manifests/<deploy_id>.json` from `fs`. If the manifest does not exist, return `404 Not Found`.
+   - Check if the requested file path exists in the manifest. If not, return `404 Not Found`.
+3. **Blob Delivery**:
+   - Retrieve the readable stream via `store.OpenBlob(hash)`. Ensure closure (`defer r.Close()`).
+   - Set `Content-Type` by extension (`.html` $\to$ `text/html`, `.css` $\to$ `text/css`, `.js` $\to$ `application/javascript`, default `application/octet-stream`).
+   - Stream content to the client via `io.Copy(w, blobReader)`.
 
 ## Task
 
-Implement `RouteRequest`:
+Implement `NewWebServer`:
 
 ```go
+type FS interface {
+    Exists(path string) bool
+    Open(path string) (io.ReadCloser, error)
+}
+
 type BlobOpener interface {
     OpenBlob(hash string) (io.ReadCloser, error)
 }
 
-type RouterState struct {
-    ActiveDeployID string
-    Manifests      map[string]map[string]string
-}
-
-type Response struct {
-    StatusCode  int
-    ContentType string
-    Body        []byte
-}
-
-func RouteRequest(state *RouterState, store BlobOpener, urlPath string) Response
+func NewWebServer(fs FS, store BlobOpener) http.Handler
 ```
-
-- Resolve root path `"/"` to `"/index.html"`.
-- If `urlPath` begins with `"/preview/<deploy_id>/"`, route using that deployment's manifest. Otherwise, use `state.ActiveDeployID`.
-- Return `StatusCode: 404` if the deployment or file path is not in the manifest.
-- Return `StatusCode: 200` with Content-Type based on extension (`.html` $\rightarrow$ `"text/html"`, `.css` $\rightarrow$ `"text/css"`, `.js` $\rightarrow$ `"application/javascript"`, default `"application/octet-stream"`).

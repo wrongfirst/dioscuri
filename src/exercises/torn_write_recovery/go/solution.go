@@ -5,87 +5,208 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"io"
 	"os"
+	"path"
+	"strings"
 )
 
-var ErrCorruptPayload = errors.New("corrupt payload")
+var (
+	ErrPowerCut       = errors.New("power cut")
+	ErrDiskFull       = errors.New("disk full")
+	ErrCorruptPayload = errors.New("corrupt payload")
+)
 
-type StagedFS interface {
-	WriteFile(path string, data []byte) error
+type FS interface {
+	Open(path string) (io.ReadCloser, error)
+	Create(path string) (io.WriteCloser, error)
 	Rename(oldPath, newPath string) error
 	Remove(path string) error
 	Exists(path string) bool
-	ReadFile(path string) ([]byte, error)
+	MkdirAll(path string) error
+	ReadDir(path string) ([]string, error)
+	WalkDir(root string, fn func(path string, isDir bool) error) error
 }
 
-type MockStagedFS struct {
-	files map[string][]byte
+type memFile struct {
+	buf  *bytes.Buffer
+	fs   *MockFS
+	path string
 }
 
-func NewMockStagedFS() *MockStagedFS {
-	return &MockStagedFS{files: make(map[string][]byte)}
-}
-
-func (m *MockStagedFS) WriteFile(p string, data []byte) error {
-	cp := make([]byte, len(data))
-	copy(cp, data)
-	m.files[p] = cp
+func (f *memFile) Write(p []byte) (int, error) { return f.buf.Write(p) }
+func (f *memFile) Close() error {
+	f.fs.Files[f.path] = f.buf.Bytes()
 	return nil
 }
 
-func (m *MockStagedFS) Rename(oldPath, newPath string) error {
-	data, ok := m.files[oldPath]
-	if !ok {
-		return os.ErrNotExist
-	}
-	delete(m.files, oldPath)
-	m.files[newPath] = data
-	return nil
+type MockFS struct {
+	Files map[string][]byte
 }
 
-func (m *MockStagedFS) Remove(p string) error {
-	delete(m.files, p)
-	return nil
+func NewMockFS() *MockFS {
+	return &MockFS{Files: make(map[string][]byte)}
 }
 
-func (m *MockStagedFS) Exists(p string) bool {
-	_, ok := m.files[p]
+func (m *MockFS) Exists(p string) bool {
+	_, ok := m.Files[p]
 	return ok
 }
 
-func (m *MockStagedFS) ReadFile(p string) ([]byte, error) {
-	data, ok := m.files[p]
+func (m *MockFS) Create(p string) (io.WriteCloser, error) {
+	return &memFile{buf: &bytes.Buffer{}, fs: m, path: p}, nil
+}
+
+func (m *MockFS) Open(p string) (io.ReadCloser, error) {
+	data, ok := m.Files[p]
 	if !ok {
 		return nil, os.ErrNotExist
 	}
-	return data, nil
+	return io.NopCloser(bytes.NewReader(data)), nil
 }
 
-// SafeSaveBlob writes to staging, verifies digest, and atomically renames to blobs dir.
-func SafeSaveBlob(fs StagedFS, claimedHash string, r io.Reader) error {
-	var buf bytes.Buffer
-	hasher := sha256.New()
-	w := io.MultiWriter(&buf, hasher)
+func (m *MockFS) Rename(oldPath, newPath string) error {
+	data, ok := m.Files[oldPath]
+	if !ok {
+		return os.ErrNotExist
+	}
+	delete(m.Files, oldPath)
+	m.Files[newPath] = data
+	return nil
+}
 
-	if _, err := io.Copy(w, r); err != nil {
+func (m *MockFS) Remove(p string) error {
+	delete(m.Files, p)
+	return nil
+}
+
+func (m *MockFS) MkdirAll(p string) error { return nil }
+
+func (m *MockFS) ReadDir(dir string) ([]string, error) {
+	return nil, nil
+}
+
+func (m *MockFS) WalkDir(root string, fn func(p string, isDir bool) error) error {
+	return nil
+}
+
+type FaultyFS struct {
+	base       FS
+	diskFull   bool
+	byteBudget int
+}
+
+func NewFaultyFS(base FS) *FaultyFS {
+	return &FaultyFS{base: base, byteBudget: -1}
+}
+
+func (f *FaultyFS) CrashAfter(bytes int) { f.byteBudget = bytes }
+func (f *FaultyFS) SetDiskFull(full bool) { f.diskFull = full }
+
+type faultyWriter struct {
+	w  io.WriteCloser
+	fs *FaultyFS
+}
+
+func (fw *faultyWriter) Write(p []byte) (int, error) {
+	if fw.fs.diskFull {
+		return 0, ErrDiskFull
+	}
+	if fw.fs.byteBudget < 0 {
+		return fw.w.Write(p)
+	}
+	if fw.fs.byteBudget == 0 {
+		return 0, ErrPowerCut
+	}
+	if len(p) <= fw.fs.byteBudget {
+		n, err := fw.w.Write(p)
+		fw.fs.byteBudget -= n
+		return n, err
+	}
+	allowed := p[:fw.fs.byteBudget]
+	n, _ := fw.w.Write(allowed)
+	fw.fs.byteBudget = 0
+	return n, ErrPowerCut
+}
+
+func (fw *faultyWriter) Close() error { return fw.w.Close() }
+
+func (f *FaultyFS) Create(p string) (io.WriteCloser, error) {
+	if f.diskFull {
+		return nil, ErrDiskFull
+	}
+	if f.byteBudget == 0 {
+		return nil, ErrPowerCut
+	}
+	w, err := f.base.Create(p)
+	if err != nil {
+		return nil, err
+	}
+	return &faultyWriter{w: w, fs: f}, nil
+}
+
+func (f *FaultyFS) Open(p string) (io.ReadCloser, error)  { return f.base.Open(p) }
+func (f *FaultyFS) Rename(old, new string) error          { return f.base.Rename(old, new) }
+func (f *FaultyFS) Remove(p string) error                 { return f.base.Remove(p) }
+func (f *FaultyFS) Exists(p string) bool                  { return f.base.Exists(p) }
+func (f *FaultyFS) MkdirAll(p string) error               { return f.base.MkdirAll(p) }
+func (f *FaultyFS) ReadDir(dir string) ([]string, error)  { return f.base.ReadDir(dir) }
+func (f *FaultyFS) WalkDir(root string, fn func(string, bool) error) error {
+	return f.base.WalkDir(root, fn)
+}
+
+type Store struct {
+	fs      FS
+	blobDir string
+}
+
+func NewStore(fs FS, blobDir string) *Store {
+	return &Store{fs: fs, blobDir: blobDir}
+}
+
+func (s *Store) BlobPath(hash string) string {
+	return path.Join(s.blobDir, hash)
+}
+
+func (s *Store) HasBlob(hash string) bool {
+	return s.fs.Exists(s.BlobPath(hash))
+}
+
+// SafeSaveBlob streams payload to staging, computes SHA-256 on the fly, cleans up on error, and atomically renames.
+func SafeSaveBlob(fs FS, store *Store, stagingDir string, claimedHash string, r io.Reader) error {
+	if store.HasBlob(claimedHash) {
+		return nil
+	}
+
+	stagingPath := path.Join(stagingDir, claimedHash+".tmp")
+	w, err := fs.Create(stagingPath)
+	if err != nil {
 		return err
+	}
+
+	hasher := sha256.New()
+	tee := io.TeeReader(r, hasher)
+
+	_, copyErr := io.Copy(w, tee)
+	closeErr := w.Close()
+
+	if copyErr != nil {
+		fs.Remove(stagingPath)
+		return copyErr
+	}
+	if closeErr != nil {
+		fs.Remove(stagingPath)
+		return closeErr
 	}
 
 	digest := hex.EncodeToString(hasher.Sum(nil))
 	if digest != claimedHash {
+		fs.Remove(stagingPath)
 		return ErrCorruptPayload
 	}
 
-	stagingPath := fmt.Sprintf("/.staging/%s.tmp", claimedHash)
-	blobPath := fmt.Sprintf("/blobs/%s", claimedHash)
-
-	if err := fs.WriteFile(stagingPath, buf.Bytes()); err != nil {
-		return err
-	}
-
-	if err := fs.Rename(stagingPath, blobPath); err != nil {
+	destPath := store.BlobPath(claimedHash)
+	if err := fs.Rename(stagingPath, destPath); err != nil {
 		fs.Remove(stagingPath)
 		return err
 	}

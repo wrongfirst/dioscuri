@@ -4,30 +4,31 @@ import (
 	"bytes"
 	"io"
 	"os"
+	"strings"
 )
 
-type ReadOpener interface {
+type ReaderFS interface {
 	Open(name string) (io.ReadCloser, error)
 }
 
-type MemoryOpener struct {
+type MockFS struct {
 	files map[string][]byte
 }
 
-func NewMemoryOpener() *MemoryOpener {
-	return &MemoryOpener{
+func NewMockFS() *MockFS {
+	return &MockFS{
 		files: make(map[string][]byte),
 	}
 }
 
-func (m *MemoryOpener) AddFile(name string, data []byte) {
+func (m *MockFS) AddFile(name string, data []byte) {
 }
 
-func (m *MemoryOpener) Open(name string) (io.ReadCloser, error) {
+func (m *MockFS) Open(name string) (io.ReadCloser, error) {
 	return nil, os.ErrNotExist
 }
 
-// ReadFileString opens and reads file content to string.
-func ReadFileString(ro ReadOpener, name string) (string, error) {
+// ReadFileString opens and streams file content to string.
+func ReadFileString(fs ReaderFS, name string) (string, error) {
 	return "", nil
 }

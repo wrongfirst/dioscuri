@@ -1,10 +1,22 @@
-Testing crash-safety requires simulating hardware faults: sudden power cuts mid-write, disk capacity limits, and storage corruption.
+Testing crash safety and recovery requires simulating hardware failures: mid-write power loss, storage capacity exhaustion, and bit-level corruption.
 
-A fault-injecting filesystem wrapper intercepts operations to simulate torn writes and disk failures.
+`FaultyFS` is a decorator around the canonical `FS` interface that injects faults into streaming writes.
+
+## Execution Flow
+
+1. **Decorator Pattern**: Wrap an underlying `FS` instance.
+2. **Fault Triggers**:
+   - `SetDiskFull(full bool)`: When enabled, `Create()` and `Write()` calls return `ErrDiskFull`.
+   - `CrashAfter(bytes int)`: Sets a write budget. When a `Write(p)` call exceeds the remaining budget, write only the allowable bytes, set the budget to `0`, and return `ErrPowerCut`.
+   - `CorruptByte(path, offset)`: Open the file, invert the byte at `offset` (`^= 0xFF`), and save it back. Return an error if out of bounds.
+3. **Stream Interception**:
+   - Return a `faultyWriter` wrapping `io.WriteCloser` from `base.Create(p)`.
+   - Intercept each `Write(p)` to enforce budget limits and disk-full conditions.
+4. **Delegation**: Forward `Open`, `Rename`, `Remove`, `Exists`, `MkdirAll`, `ReadDir`, and `WalkDir` directly to `base`.
 
 ## Task
 
-Implement `FaultyFS`:
+Implement `FaultyFS` and `faultyWriter`:
 
 ```go
 var (
@@ -13,18 +25,13 @@ var (
 )
 
 type FaultyFS struct {
-    mem         *MemoryFS
-    diskFull    bool
-    byteBudget  int // -1 if disabled
+    base       FS
+    diskFull   bool
+    byteBudget int // -1 if disabled
 }
 
-func NewFaultyFS(mem *MemoryFS) *FaultyFS
+func NewFaultyFS(base FS) *FaultyFS
 func (f *FaultyFS) SetDiskFull(full bool)
 func (f *FaultyFS) CrashAfter(bytes int)
-func (f *FaultyFS) WriteFile(path string, data []byte) error
 func (f *FaultyFS) CorruptByte(path string, offset int) error
 ```
-
-- `SetDiskFull(true)`: Future writes return `ErrDiskFull` without saving data.
-- `CrashAfter(n)`: Sets a budget of `n` total bytes. If a write exceeds the remaining budget, write only the allowable bytes to `mem` and return `ErrPowerCut`.
-- `CorruptByte(path, offset)`: Inverts the byte at `offset` (`^= 0xFF`) to simulate corruption.

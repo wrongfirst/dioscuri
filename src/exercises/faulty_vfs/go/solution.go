@@ -1,8 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"errors"
+	"io"
 	"os"
+	"path"
+	"strings"
 )
 
 var (
@@ -10,23 +14,98 @@ var (
 	ErrDiskFull = errors.New("disk full")
 )
 
-type MemoryFS struct {
+type FS interface {
+	Open(path string) (io.ReadCloser, error)
+	Create(path string) (io.WriteCloser, error)
+	Rename(oldPath, newPath string) error
+	Remove(path string) error
+	Exists(path string) bool
+	MkdirAll(path string) error
+	ReadDir(path string) ([]string, error)
+	WalkDir(root string, fn func(path string, isDir bool) error) error
+}
+
+type memFile struct {
+	buf  *bytes.Buffer
+	fs   *MockFS
+	path string
+}
+
+func (f *memFile) Write(p []byte) (int, error) { return f.buf.Write(p) }
+func (f *memFile) Close() error {
+	f.fs.Files[f.path] = f.buf.Bytes()
+	return nil
+}
+
+type MockFS struct {
 	Files map[string][]byte
 }
 
-func NewMemoryFS() *MemoryFS {
-	return &MemoryFS{Files: make(map[string][]byte)}
+func NewMockFS() *MockFS {
+	return &MockFS{Files: make(map[string][]byte)}
+}
+
+func (m *MockFS) Exists(p string) bool {
+	_, ok := m.Files[p]
+	return ok
+}
+
+func (m *MockFS) Create(p string) (io.WriteCloser, error) {
+	return &memFile{buf: &bytes.Buffer{}, fs: m, path: p}, nil
+}
+
+func (m *MockFS) Open(p string) (io.ReadCloser, error) {
+	data, ok := m.Files[p]
+	if !ok {
+		return nil, os.ErrNotExist
+	}
+	return io.NopCloser(bytes.NewReader(data)), nil
+}
+
+func (m *MockFS) Rename(oldPath, newPath string) error {
+	data, ok := m.Files[oldPath]
+	if !ok {
+		return os.ErrNotExist
+	}
+	delete(m.Files, oldPath)
+	m.Files[newPath] = data
+	return nil
+}
+
+func (m *MockFS) Remove(p string) error {
+	if _, ok := m.Files[p]; !ok {
+		return os.ErrNotExist
+	}
+	delete(m.Files, p)
+	return nil
+}
+
+func (m *MockFS) MkdirAll(p string) error { return nil }
+
+func (m *MockFS) ReadDir(dir string) ([]string, error) {
+	return nil, nil
+}
+
+func (m *MockFS) WalkDir(root string, fn func(p string, isDir bool) error) error {
+	for f := range m.Files {
+		if strings.HasPrefix(f, root) {
+			if err := fn(f, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 type FaultyFS struct {
-	mem        *MemoryFS
+	base       FS
 	diskFull   bool
 	byteBudget int // -1 if disabled
 }
 
-func NewFaultyFS(mem *MemoryFS) *FaultyFS {
+func NewFaultyFS(base FS) *FaultyFS {
 	return &FaultyFS{
-		mem:        mem,
+		base:       base,
 		diskFull:   false,
 		byteBudget: -1,
 	}
@@ -40,40 +119,80 @@ func (f *FaultyFS) CrashAfter(bytes int) {
 	f.byteBudget = bytes
 }
 
-func (f *FaultyFS) WriteFile(path string, data []byte) error {
-	if f.diskFull {
-		return ErrDiskFull
-	}
-
-	if f.byteBudget >= 0 {
-		if f.byteBudget == 0 {
-			return ErrPowerCut
-		}
-		if len(data) > f.byteBudget {
-			partial := data[:f.byteBudget]
-			cp := make([]byte, len(partial))
-			copy(cp, partial)
-			f.mem.Files[path] = cp
-			f.byteBudget = 0
-			return ErrPowerCut
-		}
-		f.byteBudget -= len(data)
-	}
-
-	cp := make([]byte, len(data))
-	copy(cp, data)
-	f.mem.Files[path] = cp
-	return nil
+type faultyWriter struct {
+	w  io.WriteCloser
+	fs *FaultyFS
 }
 
-func (f *FaultyFS) CorruptByte(path string, offset int) error {
-	data, ok := f.mem.Files[path]
-	if !ok {
-		return os.ErrNotExist
+func (fw *faultyWriter) Write(p []byte) (int, error) {
+	if fw.fs.diskFull {
+		return 0, ErrDiskFull
+	}
+	if fw.fs.byteBudget < 0 {
+		return fw.w.Write(p)
+	}
+	if fw.fs.byteBudget == 0 {
+		return 0, ErrPowerCut
+	}
+	if len(p) <= fw.fs.byteBudget {
+		n, err := fw.w.Write(p)
+		fw.fs.byteBudget -= n
+		return n, err
+	}
+	allowed := p[:fw.fs.byteBudget]
+	n, _ := fw.w.Write(allowed)
+	fw.fs.byteBudget = 0
+	return n, ErrPowerCut
+}
+
+func (fw *faultyWriter) Close() error {
+	return fw.w.Close()
+}
+
+func (f *FaultyFS) Create(p string) (io.WriteCloser, error) {
+	if f.diskFull {
+		return nil, ErrDiskFull
+	}
+	if f.byteBudget == 0 {
+		return nil, ErrPowerCut
+	}
+	w, err := f.base.Create(p)
+	if err != nil {
+		return nil, err
+	}
+	return &faultyWriter{w: w, fs: f}, nil
+}
+
+func (f *FaultyFS) CorruptByte(p string, offset int) error {
+	r, err := f.base.Open(p)
+	if err != nil {
+		return err
+	}
+	data, err := io.ReadAll(r)
+	r.Close()
+	if err != nil {
+		return err
 	}
 	if offset < 0 || offset >= len(data) {
 		return errors.New("offset out of bounds")
 	}
 	data[offset] ^= 0xFF
-	return nil
+
+	w, err := f.base.Create(p)
+	if err != nil {
+		return err
+	}
+	defer w.Close()
+	_, err = w.Write(data)
+	return err
+}
+
+func (f *FaultyFS) Open(p string) (io.ReadCloser, error)  { return f.base.Open(p) }
+func (f *FaultyFS) Rename(old, new string) error          { return f.base.Rename(old, new) }
+func (f *FaultyFS) Remove(p string) error                 { return f.base.Remove(p) }
+func (f *FaultyFS) Exists(p string) bool                  { return f.base.Exists(p) }
+func (f *FaultyFS) MkdirAll(p string) error               { return f.base.MkdirAll(p) }
+func (f *FaultyFS) ReadDir(dir string) ([]string, error)  { return f.base.ReadDir(dir) }
+func (f *FaultyFS) WalkDir(root string, fn func(string, bool) error) error {
+	return f.base.WalkDir(root, fn)
 }

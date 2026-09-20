@@ -1,13 +1,29 @@
-In deterministic simulation, invariants are asserted after every step to detect corruption or state leakage immediately.
+In simulation testing, an invariant oracle validates system state after every step to detect data corruption, dangling pointers, or broken invariants immediately.
 
-The 3 core invariants are:
-1. **Blob Integrity**: Every blob's content must match its SHA-256 key.
-2. **No Dangling References**: Every hash in every manifest must exist in blob storage.
-3. **Production Validity**: `ActiveDeployID` must resolve to an existing manifest.
+`Oracle` inspects the filesystem and blob store directly to assert the three core invariants:
+1. **Blob Integrity**: Every blob's content matches its SHA-256 filename.
+2. **Production Safety**: `/production.json` points to an existing, valid manifest.
+3. **No Dangling References**: Every hash referenced in every manifest exists in the blob store.
+
+## Execution Flow
+
+1. **`AssertBlobIntegrity()`**:
+   - List files in `store.blobDir`.
+   - Stream each blob via `store.OpenBlob(hash)` through `crypto/sha256`.
+   - If the computed digest does not match the filename, return `ErrIntegrityViolation`.
+2. **`AssertProductionSafety()`**:
+   - Open `/production.json` and decode `{"deploy_id": "..."}`.
+   - Return `ErrProductionInvalid` if missing, empty, or if `/manifests/<deploy_id>.json` does not exist on `fs`.
+3. **`AssertNoDanglingReferences()`**:
+   - List all `*.json` files in `manifestDir`.
+   - Decode each manifest (`map[string]string`) and check `store.HasBlob(hash)` for every value.
+   - Return `ErrDanglingReference` if any referenced blob is absent.
+4. **`AssertAll()`**:
+   - Execute the three assertions. Return the first error encountered, or `nil` if all invariants hold.
 
 ## Task
 
-Implement the invariant verifiers:
+Implement `Oracle`:
 
 ```go
 var (
@@ -16,17 +32,15 @@ var (
     ErrProductionInvalid  = errors.New("production pointer invalid")
 )
 
-type SystemState struct {
-    ActiveDeployID string
-    Manifests      map[string]map[string]string
-    Blobs          map[string][]byte
+type Oracle struct {
+    fs          FS
+    store       *Store
+    manifestDir string
 }
 
-func VerifyIntegrity(blobs map[string][]byte) error
-func VerifyNoDangling(manifests map[string]map[string]string, blobs map[string][]byte) error
-func VerifyProduction(state *SystemState) error
+func NewOracle(fs FS, store *Store, manifestDir string) *Oracle
+func (o *Oracle) AssertBlobIntegrity() error
+func (o *Oracle) AssertProductionSafety() error
+func (o *Oracle) AssertNoDanglingReferences() error
+func (o *Oracle) AssertAll() error
 ```
-
-- `VerifyIntegrity`: Compute SHA-256 for each blob. Return `ErrIntegrityViolation` if any key does not match its digest.
-- `VerifyNoDangling`: Verify every hash in every manifest exists in `blobs`. Return `ErrDanglingReference` if missing.
-- `VerifyProduction`: Return `ErrProductionInvalid` if `ActiveDeployID` is empty or missing from `Manifests`.

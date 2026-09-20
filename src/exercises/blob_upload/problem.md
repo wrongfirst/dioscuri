@@ -1,21 +1,29 @@
-When uploading a blob, a client specifies the claimed hash. The server must verify that the payload matches this hash before persisting it.
+When uploading a blob, the client transmits raw bytes while claiming a specific content hash. The server must verify that the streamed bytes match the claimed hash before finalizing storage.
 
-If the incoming bytes do not match the claimed hash, the upload must be rejected to prevent corrupt data in storage.
+To prevent memory exhaustion on large file uploads, the server streams the incoming request body directly to disk while concurrently hashing bytes on the fly via `io.TeeReader`.
+
+## Handler Execution Flow
+
+1. **Method Check**: Accept `PUT` or `POST`. Reject other methods with `http.StatusMethodNotAllowed` (`405`).
+2. **Hash Extraction**: Extract `claimedHash` from URL path prefix `/api/blob/` (e.g. `/api/blob/<hash>`). If missing or invalid, respond with `http.StatusBadRequest` (`400`).
+3. **Concurrent Stream & Hash**:
+   - Initialize `hasher := sha256.New()`.
+   - Wrap `r.Body` with `tee := io.TeeReader(r.Body, hasher)`.
+4. **Persist Payload**: Stream through `store.SaveBlob(claimedHash, tee)`.
+5. **Integrity Validation**:
+   - Compute `actualHash := hex.EncodeToString(hasher.Sum(nil))`.
+   - If `actualHash != claimedHash`: remove corrupt data via `store.RemoveBlob(claimedHash)` and respond with `http.StatusBadRequest` (`400`).
+   - If valid: respond with `http.StatusCreated` (`201`).
 
 ## Task
 
-Implement `IngestBlob`:
+Implement `UploadBlobHandler`:
 
 ```go
-var ErrHashMismatch = errors.New("hash mismatch")
-
-type BlobSaver interface {
+type BlobStore interface {
     SaveBlob(hash string, r io.Reader) error
+    RemoveBlob(hash string) error
 }
 
-func IngestBlob(saver BlobSaver, claimedHash string, r io.Reader) error
+func UploadBlobHandler(store BlobStore) http.HandlerFunc
 ```
-
-- Read bytes from `r` and compute their SHA-256 hex digest.
-- If the digest does not match `claimedHash`, return `ErrHashMismatch` without saving.
-- If the digest matches, save the payload via `saver.SaveBlob(claimedHash, ...)`.

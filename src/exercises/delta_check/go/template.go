@@ -1,5 +1,11 @@
 package main
 
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+)
+
 type BlobChecker interface {
 	HasBlob(hash string) bool
 }
@@ -28,7 +34,8 @@ func (m *MockBlobChecker) HasBlob(hash string) bool {
 	return m.Existing[hash]
 }
 
-// DeltaCheck returns the subset of hashes missing from store.
-func DeltaCheck(store BlobChecker, req CheckRequest) CheckResponse {
-	return CheckResponse{Missing: []string{}}
+// DeltaCheckHandler returns an http.HandlerFunc that responds with missing hashes.
+func DeltaCheckHandler(store BlobChecker) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+	}
 }

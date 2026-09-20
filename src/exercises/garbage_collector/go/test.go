@@ -1,17 +1,39 @@
 {
-	// Orphaned blob deleted while shared blobs are preserved
-	fs := NewMockGCFS("hashA", "hashB", "hashC", "hashD")
+	// Setup filesystem with 2 manifests and 5 blobs
+	fs := NewMockFS()
 
-	manifest1 := map[string]string{"/index.html": "hashA", "/app.js": "hashB"}
-	manifest2 := map[string]string{"/index.html": "hashA", "/style.css": "hashC"}
+	// Manifests
+	fs.Files["/manifests/dep-001.json"] = []byte(`{"/index.html":"live1","/style.css":"live2"}`)
+	fs.Files["/manifests/dep-002.json"] = []byte(`{"/index.html":"live2","/app.js":"live3"}`)
 
-	// hashD is not referenced by any manifest
-	deleted, err := RunGC(fs, []map[string]string{manifest1, manifest2})
+	// Blobs in storage
+	fs.Files["/blobs/live1"] = []byte("blob 1")
+	fs.Files["/blobs/live2"] = []byte("blob 2")
+	fs.Files["/blobs/live3"] = []byte("blob 3")
+	fs.Files["/blobs/orphanA"] = []byte("orphaned blob A")
+	fs.Files["/blobs/orphanB"] = []byte("orphaned blob B")
+
+	deleted, err := RunGC(fs, "/manifests", "/blobs")
 	Tests.EqualCheck("GC error is nil", nil, err)
-	Tests.EqualCheck("deleted count is 1", 1, deleted)
+	Tests.EqualCheck("deleted count is 2", 2, deleted)
 
-	Tests.EqualCheck("hashA still exists", true, fs.Blobs["hashA"])
-	Tests.EqualCheck("hashB still exists", true, fs.Blobs["hashB"])
-	Tests.EqualCheck("hashC still exists", true, fs.Blobs["hashC"])
-	Tests.EqualCheck("hashD was removed", false, fs.Blobs["hashD"])
+	// Verify live blobs retained
+	Tests.BoolCheck("live1 preserved", fs.Files["/blobs/live1"] != nil)
+	Tests.BoolCheck("live2 preserved", fs.Files["/blobs/live2"] != nil)
+	Tests.BoolCheck("live3 preserved", fs.Files["/blobs/live3"] != nil)
+
+	// Verify orphaned blobs deleted
+	Tests.BoolCheck("orphanA deleted", fs.Files["/blobs/orphanA"] == nil)
+	Tests.BoolCheck("orphanB deleted", fs.Files["/blobs/orphanB"] == nil)
+}
+
+{
+	// No orphaned blobs to delete
+	fs := NewMockFS()
+	fs.Files["/manifests/dep-001.json"] = []byte(`{"/a":"h1"}`)
+	fs.Files["/blobs/h1"] = []byte("content 1")
+
+	deleted, err := RunGC(fs, "/manifests", "/blobs")
+	Tests.EqualCheck("GC error is nil", nil, err)
+	Tests.EqualCheck("zero deleted when all live", 0, deleted)
 }

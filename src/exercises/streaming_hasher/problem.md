@@ -1,6 +1,12 @@
-Decoupling filesystem operations behind an interface allows reading from both OS storage and virtual memory filesystems.
+Content-Addressable Storage relies on computing content identities directly from files without loading entire files into memory. Reading through a filesystem interface abstraction allows the same hashing logic to run against both OS disks and virtual test filesystems.
 
-Computing the content identity of a file requires streaming its contents through SHA-256 and closing the file handle when finished.
+## Execution Flow
+
+1. **Open File**: Call `fs.Open(path)` to obtain an `io.ReadCloser`.
+2. **Handle Open Errors**: If opening fails (e.g. file does not exist), return `"", err`.
+3. **Schedule Closure**: Ensure the file descriptor is released upon function exit (`defer f.Close()`).
+4. **Stream Hash**: Initialize a SHA-256 hasher via `sha256.New()` and stream bytes using `io.Copy(hasher, f)`.
+5. **Format Hex Digest**: Compute `hasher.Sum(nil)` and return the 64-character lowercase hexadecimal string using `hex.EncodeToString`.
 
 ## Task
 
@@ -14,8 +20,5 @@ type FS interface {
 func HashFile(fs FS, path string) (string, error)
 ```
 
-- Open `path` using `fs.Open(path)`.
-- Ensure the opened file is closed when finished (`defer`).
-- Stream the file contents through a SHA-256 hasher without buffering the entire file into memory.
-- Return the 64-character lowercase hex digest string.
-- If opening or reading fails, return an empty string and the error.
+- Open `path`, defer closure, and stream its content through SHA-256.
+- Return the hexadecimal digest and any error encountered.

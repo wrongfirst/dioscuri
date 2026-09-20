@@ -1,6 +1,6 @@
 {
 	// Build manifest from directory tree
-	fs := NewMockWalkableFS()
+	fs := NewMockFS()
 	fs.Dirs = append(fs.Dirs, "/app/dist", "/app/dist/assets")
 	fs.Files["/app/dist/index.html"] = []byte("hello world")
 	fs.Files["/app/dist/assets/style.css"] = []byte("body { margin: 0; }")

@@ -1,6 +1,45 @@
-The simulation loop exercises the system by executing randomized operations (deploy, rollback, read) and asserting all correctness invariants after every step.
+The simulation loop drives the system through hundreds of randomized operations (deployments, rollbacks, reads) against an in-memory virtual filesystem, asserting all system invariants after every state transition.
 
-Running thousands of operations in memory exposes regressions before software reaches production.
+Running thousands of operations entirely in RAM exposes data corruption, broken pointers, and state leakage instantly.
+
+## Code Self-Review: Concurrency in `MemoryFS`
+
+Before assembling the simulation loop, review the pre-populated `MemoryFS` below:
+- Where could race conditions occur if concurrent simulated workers (e.g., background garbage collection and simultaneous deployments) access the virtual filesystem at the same time?
+- Verify that every inspection method (`Exists`, `Open`, `ReadDir`, `WalkDir`) acquires `RLock()` and releases it via `RUnlock()`, and every mutating method (`Create`, `Rename`, `Remove`, `MkdirAll`) holds `Lock()`.
+
+## Execution Flow
+
+In `RunSimulation(rng *rand.Rand, steps int) (SimResult, error)`:
+
+1. **Environment Setup**:
+   - Instantiate `fs := NewMemoryFS()`.
+   - Instantiate `store := NewStore(fs, "/blobs")`.
+   - Instantiate `oracle := NewOracle(fs, store, "/manifests")`.
+   - Initialize `history := make([]string, 0)`.
+2. **Step Execution**:
+   - For each step from `0` to `steps - 1`:
+     - If `len(history) == 0`: Action is **Deploy** (`0`).
+     - Otherwise: Select `action := rng.Intn(3)` (0: Deploy, 1: Rollback, 2: Read).
+   - **Action 0 (Deploy)**:
+     - Generate deployment ID: `fmt.Sprintf("dep-%04d", len(history)+1)`.
+     - Create 2 pages with deterministic content, compute SHA-256 hashes, store each blob via `store.SaveBlob(hash, reader)`, and construct `manifest[path] = hash`.
+     - Write manifest JSON to `/manifests/<deployID>.json`.
+     - Atomically update `/production.json` via temporary file rename (`/production.json.tmp` $\to$ `/production.json`).
+     - Append deployment ID to `history` and increment `res.DeploysCount`.
+   - **Action 1 (Rollback)**:
+     - Select target deployment from `history`: `targetID := history[rng.Intn(len(history))]`.
+     - Atomically update `/production.json` to point to `targetID`.
+     - Increment `res.RollbackCount`.
+   - **Action 2 (Read)**:
+     - Read active deployment pointer from `/production.json`.
+     - Open and decode active manifest from `/manifests/<activeID>.json`.
+     - Stream each referenced blob via `store.OpenBlob(hash)` and verify content matches.
+     - Increment `res.ReadsCount`.
+3. **Invariant Assertion**:
+   - After each step, execute `oracle.AssertAll()`. If an invariant fails, return `(res, err)` immediately.
+   - Increment `res.StepsExecuted`.
+4. Return `(res, nil)` upon completing all steps.
 
 ## Task
 
@@ -17,9 +56,10 @@ type SimResult struct {
 func RunSimulation(rng *rand.Rand, steps int) (SimResult, error)
 ```
 
-In each step:
-1. If no deployment exists yet, execute **Deploy**. Otherwise, select between **Deploy** (`0`), **Rollback** (`1`), and **Read** (`2`).
-2. **Deploy**: Create a new deployment ID, register its manifest and blobs, set `ActiveDeployID`, and append to history.
-3. **Rollback**: Pick a deployment from history and update `ActiveDeployID`.
-4. **Read**: Verify that all files in the active manifest exist in blob storage.
-5. After each step, verify that all 3 system invariants hold. If an invariant is violated, return the error.
+## Run Locally
+
+In your local repository scaffold (`dioscuri.zip`), you can run an aggressive 50,000-step simulation in RAM in less than a second:
+
+```bash
+go test -v -run TestSimulationLoop ./pkg/crucible
+```

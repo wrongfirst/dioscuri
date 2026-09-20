@@ -2,10 +2,12 @@ package main
 
 import (
 	"math/rand"
+	"sync"
 	"time"
 )
 
 type SimHarness struct {
+	mu  sync.Mutex
 	now time.Time
 	rng *rand.Rand
 }

@@ -4,27 +4,28 @@ import (
 	"bytes"
 	"io"
 	"os"
+	"strings"
 )
 
-type ReadOpener interface {
+type ReaderFS interface {
 	Open(name string) (io.ReadCloser, error)
 }
 
-type MemoryOpener struct {
+type MockFS struct {
 	files map[string][]byte
 }
 
-func NewMemoryOpener() *MemoryOpener {
-	return &MemoryOpener{
+func NewMockFS() *MockFS {
+	return &MockFS{
 		files: make(map[string][]byte),
 	}
 }
 
-func (m *MemoryOpener) AddFile(name string, data []byte) {
+func (m *MockFS) AddFile(name string, data []byte) {
 	m.files[name] = data
 }
 
-func (m *MemoryOpener) Open(name string) (io.ReadCloser, error) {
+func (m *MockFS) Open(name string) (io.ReadCloser, error) {
 	data, ok := m.files[name]
 	if !ok {
 		return nil, os.ErrNotExist
@@ -32,17 +33,17 @@ func (m *MemoryOpener) Open(name string) (io.ReadCloser, error) {
 	return io.NopCloser(bytes.NewReader(data)), nil
 }
 
-// ReadFileString opens and reads file content to string.
-func ReadFileString(ro ReadOpener, name string) (string, error) {
-	r, err := ro.Open(name)
+// ReadFileString opens and streams file content to string.
+func ReadFileString(fs ReaderFS, name string) (string, error) {
+	r, err := fs.Open(name)
 	if err != nil {
 		return "", err
 	}
 	defer r.Close()
 
-	data, err := io.ReadAll(r)
-	if err != nil {
+	var sb strings.Builder
+	if _, err := io.Copy(&sb, r); err != nil {
 		return "", err
 	}
-	return string(data), nil
+	return sb.String(), nil
 }

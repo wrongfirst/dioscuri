@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"math/rand"
+	"sort"
 )
 
 type Site map[string]string
@@ -18,16 +19,34 @@ func GenerateSite(rng *rand.Rand, fileCount int) Site {
 	return site
 }
 
-// MutateSite copies base and adds newFiles pages deterministically.
-func MutateSite(rng *rand.Rand, base Site, newFiles int) Site {
-	site := make(Site)
+// MutateSite clones base and applies deterministic additions, modifications, and deletions.
+func MutateSite(rng *rand.Rand, base Site, toAdd, toModify, toDelete int) Site {
+	mutated := make(Site)
 	for k, v := range base {
-		site[k] = v
+		mutated[k] = v
 	}
-	for i := 0; i < newFiles; i++ {
+
+	keys := make([]string, 0, len(base))
+	for k := range base {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	deleted := 0
+	for i := 0; i < toDelete && i < len(keys); i++ {
+		delete(mutated, keys[i])
+		deleted++
+	}
+
+	for i := deleted; i < deleted+toModify && i < len(keys); i++ {
+		mutated[keys[i]] = fmt.Sprintf("modified_%d", rng.Intn(1000))
+	}
+
+	for i := 0; i < toAdd; i++ {
 		path := fmt.Sprintf("/new_%d.html", i)
 		content := fmt.Sprintf("new_content_%d", rng.Intn(1000))
-		site[path] = content
+		mutated[path] = content
 	}
-	return site
+
+	return mutated
 }

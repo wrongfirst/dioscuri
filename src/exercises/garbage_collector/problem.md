@@ -1,20 +1,30 @@
-When deployments are removed, some blobs in storage are no longer referenced by any manifest.
+When deployments are replaced or retired, some stored blobs are no longer referenced by any active manifest. A mark-and-sweep garbage collector scans the filesystem to reclaim storage by deleting unreferenced blobs while preserving shared assets.
 
-A mark-and-sweep garbage collector deletes these orphaned blobs while preserving blobs shared by active deployments.
+## Collector Execution Flow
+
+1. **Mark Phase**:
+   - List all files in `manifestDir` via `fs.ReadDir(manifestDir)`.
+   - For every entry ending with `.json`:
+     - Open and decode the manifest file into `map[string]string`.
+     - Add every referenced hash value to a `live` set (`map[string]bool`).
+2. **Sweep Phase**:
+   - List all files in `blobDir` via `fs.ReadDir(blobDir)`.
+   - For each blob:
+     - Check if it is present in the `live` set.
+     - If not live: remove it using `fs.Remove(path.Join(blobDir, hash))` and increment `deletedCount`.
+3. **Return**:
+   - Return `deletedCount` and any error encountered.
 
 ## Task
 
 Implement `RunGC`:
 
 ```go
-type GCFS interface {
-    ListBlobs() ([]string, error)
-    DeleteBlob(hash string) error
+type FS interface {
+    ReadDir(dir string) ([]string, error)
+    Open(path string) (io.ReadCloser, error)
+    Remove(path string) error
 }
 
-func RunGC(fs GCFS, activeManifests []map[string]string) (int, error)
+func RunGC(fs FS, manifestDir string, blobDir string) (int, error)
 ```
-
-1. **Mark**: Iterate through all `activeManifests` and add every referenced hash to a live set.
-2. **Sweep**: List all existing blobs via `fs.ListBlobs()`. For any blob not in the live set, call `fs.DeleteBlob(hash)`.
-3. Return the total count of deleted blobs.

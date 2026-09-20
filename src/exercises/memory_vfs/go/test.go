@@ -1,33 +1,64 @@
 {
-	// Write, read, exists
-	fs := NewMemoryFS()
+	var fs FS = NewMemoryFS()
+
+	// 1. Initial existence check
 	Tests.EqualCheck("file does not exist initially", false, fs.Exists("/index.html"))
 
-	err := fs.WriteFile("/index.html", []byte("<h1>Dioscuri</h1>"))
-	Tests.EqualCheck("writeFile error is nil", nil, err)
-	Tests.EqualCheck("file exists after write", true, fs.Exists("/index.html"))
+	// 2. Streamed write via Create
+	w, err := fs.Create("/site/index.html")
+	Tests.EqualCheck("create error is nil", nil, err)
+	if w == nil {
+		Tests.BoolCheck("Create returned valid io.WriteCloser", false)
+		return
+	}
+	_, err = io.WriteString(w, "<h1>Pollux Memory VFS</h1>")
+	Tests.EqualCheck("write error is nil", nil, err)
+	err = w.Close()
+	Tests.EqualCheck("close error is nil", nil, err)
 
-	data, err := fs.ReadFile("/index.html")
-	Tests.EqualCheck("readFile error is nil", nil, err)
-	Tests.EqualCheck("readFile content matches", "<h1>Dioscuri</h1>", string(data))
-}
+	// 3. Existence after close
+	Tests.EqualCheck("file exists after write", true, fs.Exists("/site/index.html"))
 
-{
-	// Rename, remove, and list
-	fs := NewMemoryFS()
-	fs.WriteFile("/tmp/file.txt", []byte("temporary"))
-	fs.WriteFile("/tmp/other.txt", []byte("other"))
+	// 4. Streamed read via Open
+	r, err := fs.Open("/site/index.html")
+	Tests.EqualCheck("open error is nil", nil, err)
+	if r == nil {
+		Tests.BoolCheck("Open returned valid io.ReadCloser", false)
+		return
+	}
+	data, err := io.ReadAll(r)
+	r.Close()
+	Tests.EqualCheck("read error is nil", nil, err)
+	Tests.EqualCheck("content matches", "<h1>Pollux Memory VFS</h1>", string(data))
 
-	err := fs.Rename("/tmp/file.txt", "/data/permanent.txt")
+	// 5. Rename file
+	err = fs.Rename("/site/index.html", "/site/home.html")
 	Tests.EqualCheck("rename error is nil", nil, err)
-	Tests.EqualCheck("old path removed", false, fs.Exists("/tmp/file.txt"))
-	Tests.EqualCheck("new path exists", true, fs.Exists("/data/permanent.txt"))
+	Tests.EqualCheck("old path removed", false, fs.Exists("/site/index.html"))
+	Tests.EqualCheck("new path exists", true, fs.Exists("/site/home.html"))
 
-	err = fs.Remove("/tmp/other.txt")
+	// 6. ReadDir direct children
+	w2, _ := fs.Create("/site/about.html")
+	io.WriteString(w2, "about")
+	w2.Close()
+
+	children, err := fs.ReadDir("/site")
+	Tests.EqualCheck("readDir error is nil", nil, err)
+	Tests.EqualCheck("readDir child count is 2", 2, len(children))
+
+	// 7. Remove file
+	err = fs.Remove("/site/about.html")
 	Tests.EqualCheck("remove error is nil", nil, err)
-	Tests.EqualCheck("other removed", false, fs.Exists("/tmp/other.txt"))
+	Tests.EqualCheck("removed file does not exist", false, fs.Exists("/site/about.html"))
 
-	list := fs.ListDir("/data")
-	Tests.EqualCheck("list count", 1, len(list))
-	Tests.EqualCheck("listed item path", "/data/permanent.txt", list[0])
+	// 8. WalkDir verification
+	walkCount := 0
+	err = fs.WalkDir("/site", func(p string, isDir bool) error {
+		if !isDir {
+			walkCount++
+		}
+		return nil
+	})
+	Tests.EqualCheck("walkDir error is nil", nil, err)
+	Tests.EqualCheck("walkDir found exactly 1 remaining file", 1, walkCount)
 }

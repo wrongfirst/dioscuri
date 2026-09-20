@@ -1,37 +1,43 @@
 package main
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 )
 
-var ErrHashMismatch = errors.New("hash mismatch")
-
-type BlobSaver interface {
+type BlobStore interface {
 	SaveBlob(hash string, r io.Reader) error
+	RemoveBlob(hash string) error
 }
 
-type MockBlobSaver struct {
-	Saved map[string][]byte
+type MockBlobStore struct {
+	Blobs map[string][]byte
 }
 
-func NewMockBlobSaver() *MockBlobSaver {
-	return &MockBlobSaver{Saved: make(map[string][]byte)}
+func NewMockBlobStore() *MockBlobStore {
+	return &MockBlobStore{Blobs: make(map[string][]byte)}
 }
 
-func (m *MockBlobSaver) SaveBlob(hash string, r io.Reader) error {
+func (m *MockBlobStore) SaveBlob(hash string, r io.Reader) error {
 	data, err := io.ReadAll(r)
 	if err != nil {
 		return err
 	}
-	m.Saved[hash] = data
+	m.Blobs[hash] = data
 	return nil
 }
 
-// IngestBlob verifies that payload matches claimedHash before persisting.
-func IngestBlob(saver BlobSaver, claimedHash string, r io.Reader) error {
+func (m *MockBlobStore) RemoveBlob(hash string) error {
+	delete(m.Blobs, hash)
 	return nil
+}
+
+// UploadBlobHandler streams r.Body directly to store while verifying content hash on the fly.
+func UploadBlobHandler(store BlobStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+	}
 }

@@ -4,7 +4,11 @@ import { readFileSync, copyFileSync, existsSync } from "node:fs";
 import { parse } from "toml";
 import { parse as parseYaml } from "yaml";
 import { resolve } from "node:path";
+import { createRequire } from "node:module";
 import tailwindcss from "@tailwindcss/vite";
+
+const require = createRequire(import.meta.url);
+const pyodideVersion: string = require("pyodide/package.json").version;
 
 const buildDate = new Date().toLocaleDateString(undefined, {
   year: "numeric",
@@ -79,7 +83,7 @@ function yamlPlugin(): Plugin {
 const DEFAULT_SITE_CONFIG = {
   title: "codebook",
   subtitle: "by wrongfirst",
-  home_page: "https://wrongfirst.github.io",
+  home_page: "https://wrongfirst.dev",
   logo_emoji: "📓",
 };
 
@@ -208,6 +212,7 @@ export default defineConfig({
   },
   define: {
     BUILD_DATE: JSON.stringify(buildDate),
+    PYODIDE_VERSION: JSON.stringify(pyodideVersion),
   },
   plugins: [tailwindcss(), rawTextPlugin(), yamlPlugin(), tomlPlugin(), htmlMetaPlugin()],
 });

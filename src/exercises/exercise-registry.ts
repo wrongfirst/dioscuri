@@ -1,5 +1,5 @@
 import curriculumConfig from './curriculum.yaml';
-import { Exercise, Chapter, LanguageVariant } from '../core/types';
+import { Exercise, Chapter, LanguageVariant, type ExerciseValidator } from '../core/types';
 import { enabledLanguageIds } from '../languages/language-registry';
 import { flattenCases } from '../languages/canonical';
 import type { CanonicalData, FlatCanonicalTestCase } from '../languages/canonical';
@@ -9,6 +9,40 @@ const problemFiles = import.meta.glob<string>(
   './*/problem.md',
   { query: '?raw', import: 'default', eager: true }
 );
+
+// Discover all static exercise assets across exercise folders
+const exerciseAssets = import.meta.glob<string>(
+  './*/assets/*.{png,svg,jpg,jpeg,gif,webp}',
+  { import: 'default', eager: true }
+);
+
+function resolveExerciseAssets(folder: string, markdown: string): string {
+  if (!markdown) return '';
+  // 1. Resolve markdown image syntax: ![alt](./assets/filename.ext) or ![alt](assets/filename.ext)
+  let resolved = markdown.replace(
+    /!\[(.*?)\]\(\s*(?:\.\/)?assets\/([^\s)]+)(?:\s+["'](.*?)["'])?\s*\)/g,
+    (match, alt, filename, title) => {
+      const assetKey = `./${folder}/assets/${filename}`;
+      const bundledUrl = exerciseAssets[assetKey];
+      if (!bundledUrl) return match;
+      const titleAttr = title ? ` "${title}"` : '';
+      return `![${alt}](${bundledUrl}${titleAttr})`;
+    }
+  );
+
+  // 2. Resolve HTML <img> src attribute: <img src="./assets/filename.ext" ...>
+  resolved = resolved.replace(
+    /<img\b([^>]*?)\bsrc=["'](?:\.\/)?assets\/([^"']+)["']([^>]*?)>/gi,
+    (match, pre, filename, post) => {
+      const assetKey = `./${folder}/assets/${filename}`;
+      const bundledUrl = exerciseAssets[assetKey];
+      if (!bundledUrl) return match;
+      return `<img${pre}src="${bundledUrl}"${post}>`;
+    }
+  );
+
+  return resolved;
+}
 
 // Discover canonical-data.json files across exercise folders
 const canonicalDataFiles = import.meta.glob<CanonicalData>(
@@ -41,6 +75,32 @@ const solutionFiles = import.meta.glob<string>(
   { query: '?raw', import: 'default', eager: true }
 );
 
+type ValidatorModule = {
+  default?: ExerciseValidator;
+  validate?: ExerciseValidator;
+};
+
+// Discover optional exercise-level (shared) and language-level (override) validators
+const sharedValidatorFiles = import.meta.glob<ValidatorModule>(
+  './*/validator.ts',
+  { eager: true }
+);
+
+const sharedValidatorRawFiles = import.meta.glob<string>(
+  './*/validator.ts',
+  { query: '?raw', import: 'default', eager: true }
+);
+
+const langValidatorFiles = import.meta.glob<ValidatorModule>(
+  './*/*/validator.ts',
+  { eager: true }
+);
+
+const langValidatorRawFiles = import.meta.glob<string>(
+  './*/*/validator.ts',
+  { query: '?raw', import: 'default', eager: true }
+);
+
 function generateId(title: string): string {
   return title.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
 }
@@ -68,7 +128,8 @@ export const curriculum: Chapter[] = rawChapters.map((ch) => {
     .map((folder) => {
       const exId = folder;
       const problemPath = `./${folder}/problem.md`;
-      const description = problemFiles[problemPath] || '';
+      const rawDescription = problemFiles[problemPath] || '';
+      const description = resolveExerciseAssets(folder, rawDescription);
       const title = formatTitle(folder);
 
       const exercise: Exercise = {
@@ -123,13 +184,21 @@ function attachDiscoveredVariants(chapterList: Chapter[]) {
     const solutionPathKey = Object.keys(solutionFiles).find(p => p.startsWith(`./${folder}/${langId}/solution.`));
     const solutionCode = solutionPathKey ? (solutionFiles[solutionPathKey] || '') : '';
 
+    const langValidatorPath = `./${folder}/${langId}/validator.ts`;
+    const sharedValidatorPath = `./${folder}/validator.ts`;
+    const validatorMod = langValidatorFiles[langValidatorPath] || sharedValidatorFiles[sharedValidatorPath];
+    const validateFn = validatorMod?.validate || validatorMod?.default;
+    const validatorCode = langValidatorRawFiles[langValidatorPath] || sharedValidatorRawFiles[sharedValidatorPath] || '';
+
     if (!discoveredMap[folder]) {
       discoveredMap[folder] = {};
     }
     discoveredMap[folder][langId] = {
       initialCode,
       testCode,
-      ...(solutionCode ? { solutionCode } : {})
+      ...(solutionCode ? { solutionCode } : {}),
+      ...(validatorCode ? { validatorCode } : {}),
+      ...(validateFn ? { validate: validateFn } : {})
     };
   }
 
